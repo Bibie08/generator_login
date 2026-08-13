@@ -108,6 +108,12 @@ def main():
     col1, col2 = st.columns(2)
     with col1:
         file_pengajuan = st.file_uploader("1. Upload Data Pengajuan", type=["xlsx"])
+        
+        # --- FITUR BARU: PILIH SHEET EXCEL ---
+        if file_pengajuan:
+            excel_file = pd.ExcelFile(file_pengajuan)
+            pilihan_sheet = st.selectbox("Pilih Halaman (Sheet) yang mau diproses:", excel_file.sheet_names)
+            
     with col2:
         file_master = st.file_uploader("2. Upload Master Alamat", type=["xlsx"])
 
@@ -123,7 +129,33 @@ def main():
 
         with st.spinner("Membaca dan menyiapkan data..."):
             try:
-                pengajuan = pd.read_excel(file_pengajuan)
+                # --- UPDATE: Baca Excel berdasarkan Sheet yang dipilih user ---
+                pengajuan = pd.read_excel(file_pengajuan, sheet_name=pilihan_sheet)
+                
+                # ============================================================
+                # FITUR BARU: SATPAM PENGECEK KOLOM EXCEL
+                # ============================================================
+                kolom_wajib = [
+                    "STATUS PAYROLL NASABAH", 
+                    "NAMA NASABAH",
+                    "REGION",
+                    "AREA",
+                    "AKSEPTASI PENDAPATAN",
+                    "NAMA CABANG",
+                    "TARGET MARKET",
+                    "INSTANSI NASABAH",
+                    "PLAFOND PENGAJUAN NASABAH"
+                ]
+                
+                # Cek adakah kolom wajib yang hilang atau beda ketikan
+                kolom_hilang = [kol for kol in kolom_wajib if kol not in pengajuan.columns]
+                
+                if kolom_hilang:
+                    st.warning(f"⚠️ Waduh! Ada nama kolom yang beda atau hilang di Excel Pengajuan:\n\n**{', '.join(kolom_hilang)}**")
+                    st.info("💡 Pastikan nama kolom di atas sama persis dengan format yang ditentukan (jangan ada spasi tambahan atau salah ketik). Silakan perbaiki Excel-nya dan proses ulang ya!")
+                    return # Hentikan proses jika kolom tidak sesuai agar tidak error merah
+                # ============================================================
+
                 master = pd.read_excel(file_master, sheet_name="Nama Jalan")
                 address_lookup = build_address_lookup(master)
 
@@ -158,8 +190,8 @@ def main():
 
             try:
                 region = clean_text(row.get("REGION", ""))
-                area = get_area_from_region(row)
-                branch = clean_text(row.get("NAMA CABANG (CONTOH: KC/KCP ...)", ""))
+                area = clean_text(row.get("AREA", ""))
+                branch = clean_text(row.get("NAMA CABANG", ""))
                 nama_nasabah = clean_text(row.get("NAMA NASABAH", nama_nasabah))
 
                 address_key = (normalize(area), normalize(branch))
@@ -174,16 +206,16 @@ def main():
                 status_payroll = clean_text(row.get("STATUS PAYROLL NASABAH")).lower()
                 
                 # 2. Ambil angka gajinya saja
-                kolom_gaji = "AKSEPTASI PENDAPATAN (DIHITUNG DARI TOTAL GAJI YANG DITERIMA. CONTOH: 5600000 - AGAR PENGINPUTAN LANGSUNG BERUPA NOMINAL)"
+                kolom_gaji = "AKSEPTASI PENDAPATAN"
                 nominal_gaji = get_angka_murni(row.get(kolom_gaji))
 
                 # KONDISI 1: Jika Committed -> FIX TIDAK LOLOS (Gaji diabaikan)
-                if "comit" in status_payroll or "commit" in status_payroll:
+                if "ctp" in status_payroll or "commit" in status_payroll:
                     template_terpilih = TEMPLATE_TIDAK_LOLOS
                     label_status = "TIDAK_LOLOS"
                     
                 # KONDISI 2 & 3: Jika Efektif -> Cek Nominal Gaji
-                elif "efektif" in status_payroll:
+                elif "payroll" in status_payroll:
                     if nominal_gaji > 5000000:
                         template_terpilih = TEMPLATE_LOLOS
                         label_status = "LOLOS"
@@ -200,21 +232,30 @@ def main():
                 mapping = {
                     "TANGGAL": format_date(row.get("Start Time")),
                     "NO_SURAT_CF2": clean_text(row.get("No Surat CF2")),
-                    "REG": region,
-                    "AREA": area,
-                    "CAB": branch,
-                    "NAMA": nama_nasabah,
+                    
+                    # === INI VERSI TEKS BIASA (UNTUK DI LUAR BLOK / PARAGRAF) ===
+                    # Pakai .title() agar huruf depannya saja yang besar
+                    "REG": region.title(),          
+                    "CAB": branch.title(),          
+                    "AREA": area.title(),           
+                    "NAMA": nama_nasabah.title(),   
+                    "KETERANGAN_REKOMENDASI": clean_text(row.get("KETERANGAN REKOMENDASI")).title(),
+                    # ============================================================
+                    
+                    # === INI VERSI BLOK JUDUL (CAPSLOCK SEMUA) ===
+                    "REG_KAPITAL": region.upper(),
+                    "AREA_KAPITAL": area.upper(),
+                    "KETERANGAN_REKOMENDASI_KAPITAL": clean_text(row.get("KETERANGAN REKOMENDASI")).upper(),
+                    # ============================================================
+                    
                     "WISE": clean_text(row.get("NO APLIKASI WISE")),
-                    "SEG": clean_text(row.get("TARGET MARKET (CONTOH: BO2, BUMN, TNI/ POLRI, DLL)")),
-                    "INST": clean_text(row.get("INSTANSI NASABAH (CONTOH: KEMENTERIAN AGAMA, PT PERTAMINA (PERSERO), DLL)")),
-                    "PLAF": format_rupiah(row.get("PLAFOND PENGAJUAN NASABAH (CONTOH: 100000000 - AGAR PENGINPUTAN LANGSUNG BERUPA NOMINAL)")),
+                    "SEG": clean_text(row.get("TARGET MARKET")).title(), # Boleh dipakaikan .title() juga
+                    "INST": clean_text(row.get("INSTANSI NASABAH")).upper(), # Instansi biasanya bagus huruf besar semua
+                    "PLAF": format_rupiah(row.get("PLAFOND PENGAJUAN NASABAH")),
                     "AKS": format_rupiah(row.get(kolom_gaji)),
-                    "KET": clean_text(row.get("STATUS PAYROLL NASABAH")),
+                    "KET": clean_text(row.get("STATUS PAYROLL NASABAH")).title(),
                     "ALAMAT_AREA": address,
-                    "AREA_NAMA": area,
-                    "KETERANGAN_REKOMENDASI": clean_text(row.get("KETERANGAN REKOMENDASI")),
                 }
-
                 # Proses menggunakan template yang sudah diseleksi oleh IF-ELSE di atas
                 doc = DocxTemplate(template_terpilih)
                 doc.render(mapping)
